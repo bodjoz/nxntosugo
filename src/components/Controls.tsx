@@ -10,9 +10,11 @@ interface ControlsProps {
     scores: { black: number, white: number };
     captures: { '1': number, '-1': number };
     gameStatus: string;
+    aiPlayer: string;
+    setAiPlayer: (player: string) => void;
 }
 
-const Controls: React.FC<ControlsProps> = ({ boardSize, setBoardSize, onPass, onReset, currentPlayer, scores, captures, gameStatus }) => {
+const Controls: React.FC<ControlsProps> = ({ boardSize, setBoardSize, onPass, onReset, currentPlayer, scores, captures, gameStatus, aiPlayer, setAiPlayer }) => {
     return (
         <div className="controls-panel">
             <div className="status-banner">
@@ -47,6 +49,14 @@ const Controls: React.FC<ControlsProps> = ({ boardSize, setBoardSize, onPass, on
                         value={boardSize}
                         onChange={(e) => setBoardSize(parseInt(e.target.value, 10))}
                     />
+                </label>
+                <label>
+                    AI Opponent:
+                    <select value={aiPlayer} onChange={(e) => setAiPlayer(e.target.value)}>
+                        <option value="none">None (Local PvP)</option>
+                        <option value="1">Black</option>
+                        <option value="-1">White</option>
+                    </select>
                 </label>
             </div>
 

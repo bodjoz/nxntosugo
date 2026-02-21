@@ -6,6 +6,7 @@ import './App.css';
 
 function App() {
     const [boardSize, setBoardSize] = useState<number>(9);
+    const [aiPlayer, setAiPlayer] = useState<string>('none');
     const gameRef = useRef<TorusGo>(new TorusGo(9));
     const [, setTick] = useState<number>(0);
     const [lastMove, setLastMove] = useState<[number, number] | null>(null);
@@ -64,11 +65,54 @@ function App() {
         status = scores.black > scores.white ? 'Black Wins!' : (scores.white > scores.black ? 'White Wins!' : 'Tie Game');
     }
 
-    // AI evaluation placeholder function
+    // AI evaluation function hitting the Flask backend
     const evaluateAiHook = async () => {
-        // In a real app we would pass board state to a worker
-        // For now, doing nothing. User will manually trigger via file upload.
+        if (boardSize !== 4) return;
+        try {
+            const res = await fetch('http://localhost:5001/evaluate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ board: gameRef.current.board, currentPlayer: gameRef.current.currentPlayer })
+            });
+            const data = await res.json();
+            if (data.heatmap) {
+                setAiHeatmap(data.heatmap);
+            }
+        } catch (err) {
+            console.error("AI Evaluate Error:", err);
+        }
     };
+
+    const playAiMove = async () => {
+        if (boardSize !== 4 || gameRef.current.isGameOver) return;
+        try {
+            const res = await fetch('http://localhost:5001/play', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ board: gameRef.current.board, currentPlayer: gameRef.current.currentPlayer })
+            });
+            const data = await res.json();
+            if (data.isPass) {
+                handlePass();
+            } else if (data.x !== undefined && data.y !== undefined) {
+                handlePlayMove(data.x, data.y);
+            }
+        } catch (err) {
+            console.error("AI Play Error:", err);
+        }
+    };
+
+    useEffect(() => {
+        evaluateAiHook();
+
+        if (aiPlayer !== 'none' && parseInt(aiPlayer) === gameRef.current.currentPlayer && !gameRef.current.isGameOver) {
+            // Small delay for UX so it doesn't move instantly
+            const timer = setTimeout(() => {
+                playAiMove();
+            }, 600);
+            return () => clearTimeout(timer);
+        }
+    }, [gameRef.current.currentPlayer, aiPlayer, gameRef.current.moveCount, boardSize]);
 
     const handleAiUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -123,6 +167,8 @@ function App() {
                         scores={scores}
                         captures={game.captures}
                         gameStatus={status}
+                        aiPlayer={aiPlayer}
+                        setAiPlayer={setAiPlayer}
                     />
 
                     <div className="ai-controls panel">

@@ -4,9 +4,9 @@ from torusgo import TorusGo
 from mcts import MCTS
 from network import TorusGoNet
 
-def play_game(model, mcts_simulations=40, temperature=1.0, device='cpu'):
-    """Plays a single game of 4x4 Torus Go using MCTS and returns training data."""
-    game = TorusGo(size=4)
+def play_game(model, mcts_simulations=40, temperature=1.0, device='cpu', size=4):
+    """Plays a single game of Torus Go using MCTS and returns training data."""
+    game = TorusGo(size=size)
     mcts = MCTS(model, num_simulations=mcts_simulations, device=device)
     
     states = []

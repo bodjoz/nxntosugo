@@ -67,7 +67,7 @@ function App() {
 
     // AI evaluation function hitting the Flask backend
     const evaluateAiHook = async () => {
-        if (boardSize !== 4) return;
+        if (boardSize !== 4 && boardSize !== 9) return;
         try {
             const res = await fetch('http://localhost:5001/evaluate', {
                 method: 'POST',
@@ -84,7 +84,7 @@ function App() {
     };
 
     const playAiMove = async () => {
-        if (boardSize !== 4 || gameRef.current.isGameOver) return;
+        if ((boardSize !== 4 && boardSize !== 9) || gameRef.current.isGameOver) return;
         try {
             const res = await fetch('http://localhost:5001/play', {
                 method: 'POST',

@@ -178,7 +178,7 @@ export class TorusGo {
 
     // Tromp-Taylor Area Scoring
     public calculateScore(): { black: number; white: number } {
-        const score = { black: 0, white: 0 };
+        const score = { black: 0, white: 6.5 }; // Includes Komi
         const visited = new Set<number>();
 
         for (let i = 0; i < this.board.length; i++) {

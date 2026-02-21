@@ -146,7 +146,7 @@ class TorusGo:
             return 0.0
             
         black_score = 0
-        white_score = 0
+        white_score = 6.5 # Komi for White
         visited = set()
         
         for r in range(self.size):

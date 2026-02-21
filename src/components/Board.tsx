@@ -89,8 +89,18 @@ const Board: React.FC<BoardProps> = ({ size, boardState, currentPlayer, onPlayMo
             if (aiHeatmap && pointState === 0) {
                 const heat = aiHeatmap[index];
                 if (heat > 0.01) {
+                    const pct = Math.round(heat * 100);
+                    const fontSize = Math.max(8, cellSize * 0.32);
                     heatmaps.push(
-                        <circle key={`heat-${vx}-${vy}`} cx={cx} cy={cy} r={cellSize * 0.45} fill={`rgba(255, 50, 50, ${heat * 0.8})`} style={{ pointerEvents: 'none' }} />
+                        <g key={`heat-${vx}-${vy}`} style={{ pointerEvents: 'none' }}>
+                            <circle cx={cx} cy={cy} r={cellSize * 0.45} fill={`rgba(255, 50, 50, ${heat * 0.8})`} />
+                            <text
+                                x={cx} y={cy}
+                                textAnchor="middle" dominantBaseline="central"
+                                fill="#fff" fontSize={fontSize} fontWeight="bold"
+                                style={{ textShadow: '0 1px 2px rgba(0,0,0,0.6)' }}
+                            >{pct}</text>
+                        </g>
                     );
                 }
             }

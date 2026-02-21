@@ -12,9 +12,11 @@ interface ControlsProps {
     gameStatus: string;
     aiPlayer: string;
     setAiPlayer: (player: string) => void;
+    showHeatmap: boolean;
+    setShowHeatmap: (show: boolean) => void;
 }
 
-const Controls: React.FC<ControlsProps> = ({ boardSize, setBoardSize, onPass, onReset, currentPlayer, scores, captures, gameStatus, aiPlayer, setAiPlayer }) => {
+const Controls: React.FC<ControlsProps> = ({ boardSize, setBoardSize, onPass, onReset, currentPlayer, scores, captures, gameStatus, aiPlayer, setAiPlayer, showHeatmap, setShowHeatmap }) => {
     return (
         <div className="controls-panel">
             <div className="status-banner">
@@ -57,6 +59,14 @@ const Controls: React.FC<ControlsProps> = ({ boardSize, setBoardSize, onPass, on
                         <option value="1">Black</option>
                         <option value="-1">White</option>
                     </select>
+                </label>
+                <label className="heatmap-toggle">
+                    <input
+                        type="checkbox"
+                        checked={showHeatmap}
+                        onChange={(e) => setShowHeatmap(e.target.checked)}
+                    />
+                    Show AI Heatmap
                 </label>
             </div>
 

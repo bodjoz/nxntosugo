@@ -7,6 +7,7 @@ import './App.css';
 function App() {
     const [boardSize, setBoardSize] = useState<number>(9);
     const [aiPlayer, setAiPlayer] = useState<string>('none');
+    const [showHeatmap, setShowHeatmap] = useState<boolean>(true);
     const gameRef = useRef<TorusGo>(new TorusGo(9));
     const [, setTick] = useState<number>(0);
     const [lastMove, setLastMove] = useState<[number, number] | null>(null);
@@ -153,7 +154,7 @@ function App() {
                         currentPlayer={game.currentPlayer}
                         onPlayMove={handlePlayMove}
                         lastMove={lastMove}
-                        aiHeatmap={aiHeatmap}
+                        aiHeatmap={showHeatmap ? aiHeatmap : undefined}
                     />
                 </div>
 
@@ -169,6 +170,8 @@ function App() {
                         gameStatus={status}
                         aiPlayer={aiPlayer}
                         setAiPlayer={setAiPlayer}
+                        showHeatmap={showHeatmap}
+                        setShowHeatmap={setShowHeatmap}
                     />
 
                     <div className="ai-controls panel">

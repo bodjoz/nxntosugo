@@ -41,8 +41,8 @@ def main():
 
     # Quick sanity check — run inference on a sample position
     game = TorusGo(size=9)
-    game.board[4, 4] = -1
-    game.board[3, 4] = 1
+    game.board[4 * 9 + 4] = -1
+    game.board[3 * 9 + 4] = 1
 
     state = game.get_state_input(in_channels=4, move_number=5)
     state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0).to(device)

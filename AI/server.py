@@ -53,8 +53,8 @@ def parse_board(state_data):
         raise ValueError("Only 4x4 and 9x9 board sizes are supported for AI.")
         
     game = TorusGo(size=size)
-    board_1d = np.array(state_data['board'], dtype=np.int8)
-    game.board = board_1d.reshape((size, size))
+    # The new TorusGo expects a 1D board array
+    game.board = np.array(state_data['board'], dtype=np.int8)
     game.current_player = int(state_data['currentPlayer'])
     return game
 

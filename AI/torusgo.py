@@ -1,224 +1,217 @@
 import numpy as np
 
 class TorusGo:
-    # Class-level cache for neighbors to avoid recalculating modulo every time
+    # 1D index optimized neighbors
     _neighbor_cache = {}
 
-    def __init__(self, size=4):
+    def __init__(self, size=9):
         self.size = size
-        # Board representation: 
-        # 0 = empty, 1 = Black, -1 = White
-        self.board = np.zeros((size, size), dtype=np.int8)
+        self.total_points = size * size
+        # Board as 1D array: 0=empty, 1=Black, -1=White
+        self.board = np.zeros(self.total_points, dtype=np.int8)
         self.current_player = 1
         self.history = set()
-        self.history.add(self._get_hash(self.board, self.current_player))
+        self.history.add(self.board.tobytes() + bytes([self.current_player + 1]))
         self.passes_in_row = 0
         self.game_over = False
+        self.moves_made = 0
         
-        # Initialize neighbor cache for this size if not present
         if size not in TorusGo._neighbor_cache:
             cache = []
-            for r in range(size):
-                row_neighbors = []
-                for c in range(size):
-                    row_neighbors.append([
-                        ((r - 1) % size, c),
-                        ((r + 1) % size, c),
-                        (r, (c - 1) % size),
-                        (r, (c + 1) % size)
-                    ])
-                cache.append(row_neighbors)
+            for i in range(self.total_points):
+                r, c = i // size, i % size
+                neighbors = [
+                    ((r - 1) % size) * size + c,
+                    ((r + 1) % size) * size + c,
+                    r * size + ((c - 1) % size),
+                    r * size + ((c + 1) % size)
+                ]
+                cache.append(np.array(neighbors, dtype=np.int32))
             TorusGo._neighbor_cache[size] = cache
-        self.neighbors = TorusGo._neighbor_cache[size]
-        
-    def _get_hash(self, board, player):
-        return board.tobytes() + bytes([player + 1])
-        
+        self.neighbor_indices = TorusGo._neighbor_cache[size]
+
+    def _get_hash(self, board_bytes, player):
+        return board_bytes + bytes([player + 1])
+
     def get_legal_moves(self):
-        """Returns a 1D array of legal moves. Length = size*size + 1 (pass is last)."""
-        legal = np.zeros(self.size * self.size + 1, dtype=np.float32)
-        if self.game_over:
-            return legal
-            
+        legal = np.zeros(self.total_points + 1, dtype=np.float32)
+        if self.game_over: return legal
         legal[-1] = 1.0 # Pass
-        
-        # Check all intersections.
-        for r in range(self.size):
-            board_row = self.board[r]
-            for c in range(self.size):
-                if board_row[c] == 0:
-                    if self._is_legal(r, c):
-                        legal[r * self.size + c] = 1.0
+        for i in range(self.total_points):
+            if self.board[i] == 0:
+                if self._is_legal(i):
+                    legal[i] = 1.0
         return legal
-        
-    def _find_group_info(self, r, c, board):
-        """Finds group and its liberties in one pass."""
-        color = board[r, c]
-        group = {(r, c)}
-        stack = [(r, c)]
-        liberties = set()
+
+    def _find_group_info(self, start_pos, board):
+        color = board[start_pos]
+        group = [start_pos]
+        visited = {start_pos}
+        stack = [start_pos]
+        liberties = 0
         
         while stack:
-            curr_r, curr_c = stack.pop()
-            for nr, nc in self.neighbors[curr_r][curr_c]:
-                val = board[nr, nc]
+            curr = stack.pop()
+            for neighbor in self.neighbor_indices[curr]:
+                val = board[neighbor]
                 if val == 0:
-                    liberties.add((nr, nc))
-                elif val == color and (nr, nc) not in group:
-                    group.add((nr, nc))
-                    stack.append((nr, nc))
-        return group, len(liberties)
-        
-    def _is_legal(self, r, c):
-        if self.board[r, c] != 0:
-            return False
-            
+                    liberties += 1 # This counts same liberty multiple times but we only need to know if > 0
+                elif val == color and neighbor not in visited:
+                    visited.add(neighbor)
+                    group.append(neighbor)
+                    stack.append(neighbor)
+        return group, liberties
+
+    def _is_legal(self, pos):
         color = self.current_player
         opponent = -color
         
-        has_direct_liberty = False
-        enemy_neighbors = []
+        # 1. Direct liberty?
+        has_liberty = False
+        for neighbor in self.neighbor_indices[pos]:
+            if self.board[neighbor] == 0:
+                has_liberty = True
+                break
         
-        # Quick check for direct liberties or potential captures
-        for nr, nc in self.neighbors[r][c]:
-            val = self.board[nr, nc]
-            if val == 0:
-                has_direct_liberty = True
-            elif val == opponent:
-                enemy_neighbors.append((nr, nc))
-                
-        # Try move on a temp board for capture resolution and suicide check
-        captured_any = False
-        new_board = None
+        # 2. Capture?
+        captures_any = False
+        # We need a temporary board only if we might capture or if it might be suicide
+        temp_board = None
         
-        # Check neighbors to see if we capture them
-        for nr, nc in enemy_neighbors:
-            # We must use the current state of liberties
-            # If we already captured a group containing this neighbor, skip
-            if new_board is not None and new_board[nr, nc] == 0:
-                continue
-                
-            group, libs = self._find_group_info(nr, nc, self.board)
-            if libs == 1: # Filling the last liberty!
-                captured_any = True
-                if new_board is None:
-                    new_board = self.board.copy()
-                    new_board[r, c] = color
-                for er, ec in group:
-                    new_board[er, ec] = 0
-                    
-        if not captured_any:
-            if not has_direct_liberty:
-                # Suicide check: does our own group have any liberties?
-                new_board_tmp = self.board.copy()
-                new_board_tmp[r, c] = color
-                _, libs = self._find_group_info(r, c, new_board_tmp)
+        for neighbor in self.neighbor_indices[pos]:
+            if self.board[neighbor] == opponent:
+                # Does this enemy group have only 1 liberty (the one we're filling)?
+                _, libs = self._find_group_info_precise(neighbor, self.board, ignore_pos=pos)
                 if libs == 0:
-                    return False
-                new_board = new_board_tmp
-            else:
-                # Definitely not suicide, just create the board for superko check
-                new_board = self.board.copy()
-                new_board[r, c] = color
+                    captures_any = True
+                    break
         
-        # Superko check
-        state_hash = self._get_hash(new_board, opponent)
+        if captures_any:
+            # Must check superko if we capture
+            temp_board = self.board.copy()
+            temp_board[pos] = color
+            for neighbor in self.neighbor_indices[pos]:
+                if temp_board[neighbor] == opponent:
+                    group, libs = self._find_group_info_precise(neighbor, temp_board)
+                    if libs == 0:
+                        for p in group: temp_board[p] = 0
+            state_hash = self._get_hash(temp_board.tobytes(), opponent)
+            return state_hash not in self.history
+
+        if has_liberty:
+            # Not suicide, but still check superko
+            temp_board = self.board.copy()
+            temp_board[pos] = color
+            state_hash = self._get_hash(temp_board.tobytes(), opponent)
+            return state_hash not in self.history
+            
+        # 3. Suicide?
+        temp_board = self.board.copy()
+        temp_board[pos] = color
+        _, libs = self._find_group_info_precise(pos, temp_board)
+        if libs == 0: return False
+        
+        # Check superko for non-suicide move
+        state_hash = self._get_hash(temp_board.tobytes(), opponent)
         return state_hash not in self.history
 
+    def _find_group_info_precise(self, start_pos, board, ignore_pos=-1):
+        color = board[start_pos]
+        group = {start_pos}
+        stack = [start_pos]
+        liberties = set()
+        while stack:
+            curr = stack.pop()
+            for neighbor in self.neighbor_indices[curr]:
+                if neighbor == ignore_pos: continue
+                val = board[neighbor]
+                if val == 0:
+                    liberties.add(neighbor)
+                elif val == color and neighbor not in group:
+                    group.add(neighbor)
+                    stack.append(neighbor)
+        return group, len(liberties)
+
     def step(self, action):
-        if self.game_over:
-            return self.get_reward(), True
-            
-        if action == self.size * self.size:
+        if self.game_over: return 0.0, True
+        self.moves_made += 1
+        
+        if action == self.total_points:
             self.passes_in_row += 1
-            if self.passes_in_row >= 2:
-                self.game_over = True
+            if self.passes_in_row >= 2: self.game_over = True
             self.current_player = -self.current_player
-            self.history.add(self._get_hash(self.board, self.current_player))
+            self.history.add(self._get_hash(self.board.tobytes(), self.current_player))
             return 0.0, self.game_over
             
         self.passes_in_row = 0
-        r, c = action // self.size, action % self.size
-        
         color = self.current_player
         opponent = -color
-        self.board[r, c] = color
+        self.board[action] = color
         
-        # Resolve captures efficiently
-        for nr, nc in self.neighbors[r][c]:
-            if self.board[nr, nc] == opponent:
-                group, libs = self._find_group_info(nr, nc, self.board)
+        for neighbor in self.neighbor_indices[action]:
+            if self.board[neighbor] == opponent:
+                group, libs = self._find_group_info_precise(neighbor, self.board)
                 if libs == 0:
-                    for er, ec in group:
-                        self.board[er, ec] = 0
+                    for p in group: self.board[p] = 0
                         
         self.current_player = opponent
-        self.history.add(self._get_hash(self.board, self.current_player))
+        self.history.add(self._get_hash(self.board.tobytes(), self.current_player))
         return 0.0, False
-        
+
     def get_reward(self):
-        if not self.game_over:
-            return 0.0
-            
+        if not self.game_over: return 0.0
         black_score = 0
         white_score = 6.5
-        visited = set()
-        
-        for r in range(self.size):
-            for c in range(self.size):
-                if self.board[r, c] == 1:
-                    black_score += 1
-                elif self.board[r, c] == -1:
-                    white_score += 1
-                elif (r, c) not in visited:
-                    group, reached_black, reached_white = self._score_empty_group(r, c, visited)
-                    if reached_black and not reached_white:
-                        black_score += len(group)
-                    elif reached_white and not reached_black:
-                        white_score += len(group)
-                        
+        visited = [False] * self.total_points
+        for i in range(self.total_points):
+            if self.board[i] == 1: black_score += 1
+            elif self.board[i] == -1: white_score += 1
+            elif not visited[i]:
+                group, reached_black, reached_white = self._score_empty_group(i, visited)
+                if reached_black and not reached_white: black_score += len(group)
+                elif reached_white and not reached_black: white_score += len(group)
         return 1.0 if black_score > white_score else -1.0 if white_score > black_score else 0.0
 
-    def _score_empty_group(self, r, c, globally_visited):
-        group = {(r, c)}
-        stack = [(r, c)]
-        globally_visited.add((r, c))
-        reached_black = False
-        reached_white = False
-        
+    def _score_empty_group(self, start_pos, globally_visited):
+        group = {start_pos}
+        stack = [start_pos]
+        globally_visited[start_pos] = True
+        reached_black, reached_white = False, False
         while stack:
-            curr_r, curr_c = stack.pop()
-            for nr, nc in self.neighbors[curr_r][curr_c]:
-                val = self.board[nr, nc]
+            curr = stack.pop()
+            for neighbor in self.neighbor_indices[curr]:
+                val = self.board[neighbor]
                 if val == 0:
-                    if (nr, nc) not in group:
-                        group.add((nr, nc))
-                        globally_visited.add((nr, nc))
-                        stack.append((nr, nc))
-                elif val == 1:
-                    reached_black = True
-                elif val == -1:
-                    reached_white = True
+                    if not globally_visited[neighbor]:
+                        globally_visited[neighbor] = True
+                        group.add(neighbor)
+                        stack.append(neighbor)
+                elif val == 1: reached_black = True
+                elif val == -1: reached_white = True
         return group, reached_black, reached_white
 
     def clone(self):
         new_game = TorusGo(self.size)
         new_game.board = self.board.copy()
         new_game.current_player = self.current_player
-        new_game.history = set(self.history)
+        new_game.history = self.history.copy()
         new_game.passes_in_row = self.passes_in_row
         new_game.game_over = self.game_over
+        new_game.moves_made = self.moves_made
         return new_game
-        
+
     def get_state_input(self, in_channels=2, move_number=0):
+        # Neural network expects [C, H, W]
         if in_channels == 4:
             state = np.zeros((4, self.size, self.size), dtype=np.float32)
-            state[0] = (self.board == self.current_player).astype(np.float32)
-            state[1] = (self.board == -self.current_player).astype(np.float32)
+            board_2d = self.board.reshape(self.size, self.size)
+            state[0] = (board_2d == self.current_player).astype(np.float32)
+            state[1] = (board_2d == -self.current_player).astype(np.float32)
             state[2] = 1.0 if self.current_player == 1 else 0.0
-            state[3] = min(1.0, move_number / (2 * self.size * self.size))
+            state[3] = min(1.0, self.moves_made / (2 * self.total_points))
         else:
             state = np.zeros((2, self.size, self.size), dtype=np.float32)
-            state[0] = (self.board == self.current_player).astype(np.float32)
-            state[1] = (self.board == -self.current_player).astype(np.float32)
+            board_2d = self.board.reshape(self.size, self.size)
+            state[0] = (board_2d == self.current_player).astype(np.float32)
+            state[1] = (board_2d == -self.current_player).astype(np.float32)
         return state

@@ -1,18 +1,7 @@
 [
   {
     "cycle": 1,
-    "loss": 5.38846222559611,
-    "pi_loss": 4.419321537017822,
-    "v_loss": 0.9691406223509047,
-    "buffer_size": 2070,
-    "games": 4,
-    "avg_game_len": 104.75,
-    "cycle_time_s": 15.696615934371948,
-    "lr": 0.002,
-    "black_wins": 2,
-    "white_wins": 2,
-    "draws": 0,
-    "black_win_pct": 50.0,
-    "white_win_pct": 50.0
+    "loss": 5.361776113510132,
+    "black_win_pct": 0.0
   }
 ]

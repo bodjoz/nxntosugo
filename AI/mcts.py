@@ -62,7 +62,8 @@ class MCTS:
     def _get_state_tensor(self, game, move_number=0):
         """Create state tensor with correct number of input channels."""
         state = game.get_state_input(in_channels=self.in_channels, move_number=move_number)
-        return torch.tensor(state, dtype=torch.float32).unsqueeze(0).to(self.device)
+        # Faster tensor creation: from_numpy avoids a copy, then move to device
+        return torch.from_numpy(state).unsqueeze(0).to(self.device)
         
     def get_action_prob(self, game, temperature=1.0, move_number=0):
         """Runs MCTS and returns visitation probabilities for the root state."""

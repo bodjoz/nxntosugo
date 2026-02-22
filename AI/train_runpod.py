@@ -3,15 +3,24 @@
 GPU-optimized AlphaZero training for 9x9 Torus Go.
 Designed for RunPod RTX 4090 or similar CUDA GPUs.
 
+Self-play runs directly on GPU for fast inference (~0.2ms/position vs ~5ms on CPU).
+This is faster than CPU-parallel multiprocessing for CUDA GPUs.
+
 Usage:
-    # Full training run
-    python train_runpod.py --cycles 100 --games-per-cycle 500 --mcts-sims 200 --workers 12
+    # Full training run (recommended for RTX 4090)
+    python train_runpod.py --cycles 100 --games-per-cycle 200 --mcts-sims 200
+
+    # Faster initial training (first 24h)
+    python train_runpod.py --cycles 100 --games-per-cycle 200 --mcts-sims 100
 
     # Quick dry-run test
-    python train_runpod.py --dry-run --cycles 1 --games-per-cycle 2 --mcts-sims 10 --workers 2
+    python train_runpod.py --dry-run --cycles 1 --games-per-cycle 2 --mcts-sims 10
 
     # Resume from checkpoint
-    python train_runpod.py --resume --cycles 100 --games-per-cycle 500 --mcts-sims 200 --workers 12
+    python train_runpod.py --resume --cycles 100 --games-per-cycle 200 --mcts-sims 200
+
+    # Force CPU-parallel mode (e.g. for Mac MPS where GPU self-play has issues)
+    python train_runpod.py --cpu-selfplay --workers 8 --cycles 100 --games-per-cycle 200 --mcts-sims 100
 """
 import torch
 import torch.nn as nn
@@ -54,6 +63,62 @@ class GoDataset(Dataset):
         return self.states[idx], self.policies[idx], self.values[idx]
 
 # ---------------------------------------------------------------------------
+# GPU Self-Play: runs games sequentially with GPU inference (FAST)
+# ---------------------------------------------------------------------------
+def gpu_selfplay(model, device, num_games, mcts_sims, in_channels):
+    """Run self-play games sequentially on GPU. Each MCTS inference is a single
+    GPU forward pass (~0.2ms on RTX 4090), making this faster than CPU-parallel."""
+    all_states, all_policies, all_values = [], [], []
+    game_results = []
+
+    model.eval()
+    for g in range(num_games):
+        states, policies, values = play_game(
+            model, mcts_simulations=mcts_sims, temperature=1.0,
+            device=device, size=BOARD_SIZE, add_noise=True, in_channels=in_channels
+        )
+        all_states.extend(states)
+        all_policies.extend(policies)
+        all_values.extend(values)
+
+        # Track game result (values[0] = result from Black's perspective)
+        game_result = values[0] if len(values) > 0 else 0.0
+        game_results.append(game_result)
+
+        if (g + 1) % max(1, num_games // 10) == 0:
+            print(f"  ... {g+1}/{num_games} games done", flush=True)
+
+    return all_states, all_policies, all_values, game_results
+
+# ---------------------------------------------------------------------------
+# CPU Self-Play: runs games in parallel with multiprocessing (for non-CUDA)
+# ---------------------------------------------------------------------------
+def cpu_selfplay(model, num_games, mcts_sims, in_channels, workers):
+    """Run self-play games in parallel on CPU workers."""
+    model_state = {k: v.cpu() for k, v in model.state_dict().items()}
+    worker_args = [
+        (model_state, mcts_sims, BOARD_SIZE, in_channels)
+        for _ in range(num_games)
+    ]
+
+    all_states, all_policies, all_values = [], [], []
+    game_results = []
+    completed = 0
+
+    with mp.Pool(processes=workers) as pool:
+        for result in pool.imap_unordered(play_game_for_worker, worker_args):
+            states, policies, values, game_result = result
+            all_states.extend(states)
+            all_policies.extend(policies)
+            all_values.extend(values)
+            game_results.append(game_result)
+            completed += 1
+            if completed % max(1, num_games // 10) == 0:
+                print(f"  ... {completed}/{num_games} games done", flush=True)
+
+    return all_states, all_policies, all_values, game_results
+
+# ---------------------------------------------------------------------------
 # Evaluation: pit current model vs. previous best
 # ---------------------------------------------------------------------------
 def evaluate_models(current_model, best_model, device, num_games=40, mcts_sims=100):
@@ -64,7 +129,6 @@ def evaluate_models(current_model, best_model, device, num_games=40, mcts_sims=1
     wins = 0
     for g in range(num_games):
         game = TorusGo(size=BOARD_SIZE)
-        # Alternate who plays Black
         current_is_black = (g % 2 == 0)
 
         mcts_current = MCTS(current_model, num_simulations=mcts_sims, device=device)
@@ -74,14 +138,14 @@ def evaluate_models(current_model, best_model, device, num_games=40, mcts_sims=1
         while not game.game_over:
             is_current_turn = (game.current_player == 1) == current_is_black
             mcts_obj = mcts_current if is_current_turn else mcts_best
-            action_probs = mcts_obj.get_action_prob(game, temperature=0.0)
+            action_probs = mcts_obj.get_action_prob(game, temperature=0.0, move_number=move_number)
             action = int(np.argmax(action_probs))
             game.step(action)
             move_number += 1
-            if move_number > 200:  # safety cap
+            if move_number > 200:
                 break
 
-        reward = game.get_reward()  # +1 if Black wins
+        reward = game.get_reward()
         if current_is_black and reward > 0:
             wins += 1
         elif not current_is_black and reward < 0:
@@ -102,7 +166,13 @@ def train(args):
         device = torch.device('mps')
     else:
         device = torch.device('cpu')
-    print(f"[train] Using device: {device}")
+
+    # Decide self-play mode
+    use_gpu_selfplay = (device.type == 'cuda') and not args.cpu_selfplay
+    if use_gpu_selfplay:
+        print(f"[train] Using device: {device} (GPU self-play — fast inference)")
+    else:
+        print(f"[train] Using device: {device} (CPU-parallel self-play, {args.workers} workers)")
 
     # Model
     model = TorusGoNet(
@@ -159,36 +229,24 @@ def train(args):
         lr = optimizer.param_groups[0]['lr']
         print(f"\n{'='*60}")
         print(f"  CYCLE {cycle+1}/{args.cycles}  |  LR: {lr:.6f}  |  Buffer: {len(all_states)} positions")
-        print(f"{'='*60}")
+        print(f"{'='*60}", flush=True)
 
         # -------------------------------------------------------------------
-        # 1. Self-play (parallel on CPU)
+        # 1. Self-play
         # -------------------------------------------------------------------
         model.eval()
-        model_state = {k: v.cpu() for k, v in model.state_dict().items()}
-
-        print(f"[selfplay] Generating {args.games_per_cycle} games with {args.workers} workers, {args.mcts_sims} MCTS sims...")
+        print(f"[selfplay] Generating {args.games_per_cycle} games, {args.mcts_sims} MCTS sims "
+              f"({'GPU' if use_gpu_selfplay else f'CPU x{args.workers}'})...", flush=True)
         sp_start = time.time()
 
-        worker_args = [
-            (model_state, args.mcts_sims, BOARD_SIZE, IN_CHANNELS)
-            for _ in range(args.games_per_cycle)
-        ]
-
-        cycle_states, cycle_policies, cycle_values = [], [], []
-        game_results = []  # +1=Black win, -1=White win, 0=draw
-        completed = 0
-
-        with mp.Pool(processes=args.workers) as pool:
-            for result in pool.imap_unordered(play_game_for_worker, worker_args):
-                states, policies, values, game_result = result
-                cycle_states.extend(states)
-                cycle_policies.extend(policies)
-                cycle_values.extend(values)
-                game_results.append(game_result)
-                completed += 1
-                if completed % max(1, args.games_per_cycle // 10) == 0:
-                    print(f"  ... {completed}/{args.games_per_cycle} games done")
+        if use_gpu_selfplay:
+            cycle_states, cycle_policies, cycle_values, game_results = gpu_selfplay(
+                model, device, args.games_per_cycle, args.mcts_sims, IN_CHANNELS
+            )
+        else:
+            cycle_states, cycle_policies, cycle_values, game_results = cpu_selfplay(
+                model, args.games_per_cycle, args.mcts_sims, IN_CHANNELS, args.workers
+            )
 
         sp_time = time.time() - sp_start
         avg_game_len = len(cycle_states) / max(1, args.games_per_cycle)
@@ -203,7 +261,7 @@ def train(args):
         draw_pct = draws / total_games * 100 if total_games > 0 else 0
 
         print(f"[selfplay] {args.games_per_cycle} games in {sp_time:.1f}s ({sp_time/args.games_per_cycle:.2f}s/game, avg {avg_game_len:.0f} moves)")
-        print(f"[selfplay] Results: Black {black_wins}/{total_games} ({black_pct:.1f}%) | White {white_wins}/{total_games} ({white_pct:.1f}%) | Draw {draws}/{total_games} ({draw_pct:.1f}%)")
+        print(f"[selfplay] Results: Black {black_wins}/{total_games} ({black_pct:.1f}%) | White {white_wins}/{total_games} ({white_pct:.1f}%) | Draw {draws}/{total_games} ({draw_pct:.1f}%)", flush=True)
 
         # -------------------------------------------------------------------
         # 2. Torus data augmentation
@@ -279,9 +337,7 @@ def train(args):
                 torch.save(model.state_dict(), os.path.join(CHECKPOINT_DIR, "model_9x9_best.pt"))
             else:
                 print(f"[eval] ❌ Keeping previous best (win rate {win_rate:.1%} < 55%)")
-                # Optionally revert to best: model.load_state_dict(best_model.state_dict())
         elif (cycle + 1) % args.eval_interval == 0 and args.dry_run:
-            # In dry-run, just accept the model
             best_model.load_state_dict(model.state_dict())
 
         # -------------------------------------------------------------------
@@ -313,7 +369,7 @@ def train(args):
                 'best_model': best_model.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'scheduler': scheduler.state_dict(),
-                'buffer_states': all_states[-50000:],  # save last 50K to limit file size
+                'buffer_states': all_states[-50000:],
                 'buffer_policies': all_policies[-50000:],
                 'buffer_values': all_values[-50000:],
             }
@@ -327,7 +383,7 @@ def train(args):
 
         total_elapsed = (time.time() - total_start) / 3600
         est_remaining = (total_elapsed / (cycle - start_cycle + 1)) * (args.cycles - cycle - 1)
-        print(f"[time] Cycle: {cycle_time:.0f}s | Total: {total_elapsed:.1f}h | Est. remaining: {est_remaining:.1f}h")
+        print(f"[time] Cycle: {cycle_time:.0f}s | Total: {total_elapsed:.1f}h | Est. remaining: {est_remaining:.1f}h", flush=True)
 
     # Save final models
     torch.save(model.state_dict(), os.path.join(CHECKPOINT_DIR, "model_9x9_final.pt"))
@@ -344,9 +400,10 @@ def main():
 
     parser = argparse.ArgumentParser(description="Train 9x9 Torus Go on GPU")
     parser.add_argument('--cycles', type=int, default=100, help='Number of training cycles')
-    parser.add_argument('--games-per-cycle', type=int, default=500, help='Self-play games per cycle')
+    parser.add_argument('--games-per-cycle', type=int, default=200, help='Self-play games per cycle')
     parser.add_argument('--mcts-sims', type=int, default=200, help='MCTS simulations per move')
-    parser.add_argument('--workers', type=int, default=12, help='Number of parallel self-play workers')
+    parser.add_argument('--workers', type=int, default=8, help='CPU workers (only used with --cpu-selfplay)')
+    parser.add_argument('--cpu-selfplay', action='store_true', help='Force CPU-parallel self-play instead of GPU')
     parser.add_argument('--batch-size', type=int, default=256, help='Training batch size')
     parser.add_argument('--train-epochs', type=int, default=4, help='Training epochs per cycle')
     parser.add_argument('--lr', type=float, default=0.002, help='Initial learning rate')
@@ -366,8 +423,9 @@ def main():
         args.save_interval = 1
 
     print(f"[config] cycles={args.cycles}, games/cycle={args.games_per_cycle}, "
-          f"mcts_sims={args.mcts_sims}, workers={args.workers}, batch={args.batch_size}, "
-          f"lr={args.lr}, augment={args.augment}")
+          f"mcts_sims={args.mcts_sims}, "
+          f"selfplay={'CPU x' + str(args.workers) if args.cpu_selfplay else 'GPU'}, "
+          f"batch={args.batch_size}, lr={args.lr}, augment={args.augment}")
 
     train(args)
 

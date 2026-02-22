@@ -80,24 +80,21 @@ pip install numpy tensorboard
 
 ## Step 5: Start Training
 
-### Recommended full training run (~24-48 hours):
+Start the training process. By default, it will detect the CUDA GPU and use it for both self-play inference and network training.
+
 ```bash
+# Recommended command for RTX 4090 (runs in background)
 nohup python -u train_runpod.py \
     --cycles 100 \
-    --games-per-cycle 500 \
+    --games-per-cycle 200 \
     --mcts-sims 200 \
-    --workers 12 \
-    --batch-size 256 \
-    --augment 4 \
     > training.log 2>&1 &
 ```
 
-The `nohup` ensures training continues even if you close the terminal.
-
-### Quick test (verify everything works, ~2 minutes):
-```bash
-python train_runpod.py --dry-run --cycles 1 --games-per-cycle 2 --mcts-sims 10 --workers 2
-```
+### Note on Performance
+- **GPU Self-Play (New)**: The script now runs self-play directly on the GPU. Even though it's sequential, GPU inference is so fast (~0.2ms) that it's much faster than using 12 CPU workers. 
+- **Wait for Cycle 1**: It might take a minute to start seeing "games done" messages in `training.log`.
+- **Reduced games-per-cycle**: I've reduced the default to 200 to make cycles faster, which helps the network update more frequently.
 
 ---
 

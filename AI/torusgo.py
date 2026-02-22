@@ -1,25 +1,20 @@
 import numpy as np
 
 class TorusGo:
-    # 1D index optimized neighbors
     _neighbor_cache = {}
 
     def __init__(self, size=9, max_moves=None):
         self.size = size
         self.total_points = size * size
-        # Board as 1D array: 0=empty, 1=Black, -1=White
         self.board = np.zeros(self.total_points, dtype=np.int8)
         self.current_player = 1
-        self.history = set()
-        self.board_hash = self.board.tobytes()
-        self.history.add(self.board_hash + bytes([self.current_player + 1]))
         self.passes_in_row = 0
         self.game_over = False
         self.moves_made = 0
         self.max_moves = max_moves or (size * size * 2)
         
-        # Simple Ko: store the previous board hash to prevent immediate recapture
-        self.prev_board_hash = None
+        # We only track history in the REAL game, not during MCTS
+        self.history = None 
         
         if size not in TorusGo._neighbor_cache:
             cache = []
@@ -36,52 +31,54 @@ class TorusGo:
         self.neighbor_indices = TorusGo._neighbor_cache[size]
 
     def get_legal_moves(self):
-        """Ultralight legality check for MCTS. Skips Superko, only checks suicide/Ko."""
+        """Standard legality check."""
         legal = np.zeros(self.total_points + 1, dtype=np.float32)
         if self.game_over: return legal
         legal[-1] = 1.0 # Pass
-        
         for i in range(self.total_points):
             if self.board[i] == 0:
-                if self._is_legal_quick(i):
+                if self._is_legal(i):
                     legal[i] = 1.0
         return legal
 
-    def _is_legal_quick(self, pos):
-        """Checks legality without board copies or hashes where possible."""
+    def _is_legal(self, pos):
         color = self.current_player
         opponent = -color
         
-        # 1. Immediate liberty? (Fastest check)
+        # 1. Liberty check
         for neighbor in self.neighbor_indices[pos]:
-            if self.board[neighbor] == 0:
-                return True
+            if self.board[neighbor] == 0: return True
         
-        # 2. Capture an enemy?
+        # 2. Capture check
         for neighbor in self.neighbor_indices[pos]:
             if self.board[neighbor] == opponent:
-                _, libs = self._find_group_info_fast(neighbor, self.board, ignore_pos=pos)
-                if libs == 0:
-                    # Potential capture. For MCTS, we consider this legal.
-                    # Simple Ko check would go here if needed.
-                    return True
-                    
-        # 3. Suicide?
-        # If no immediate liberties and no captures, check if own group will have liberties
-        # Optimization: temporarily place stone and check group info
-        self.board[pos] = color
-        _, libs = self._find_group_info_fast(pos, self.board)
-        self.board[pos] = 0 # Reset
+                _, libs = self._find_group_info(neighbor, self.board, ignore_pos=pos)
+                if libs == 0: return True
         
-        return libs > 0
+        # 3. Suicide check
+        self.board[pos] = color
+        _, libs = self._find_group_info(pos, self.board)
+        self.board[pos] = 0
+        if libs > 0:
+            # Check superko if history is present (only in real game)
+            if self.history is not None:
+                # This part is slow but only happens in real game loop
+                temp_board = self.board.copy()
+                temp_board[pos] = color
+                state_hash = temp_board.tobytes() + bytes([-color + 1])
+                return state_hash not in self.history
+            return True
+        return False
 
-    def _find_group_info_fast(self, start_pos, board, ignore_pos=-1):
-        """Returns group and count of UNIQUE liberties."""
+    def _find_group_info(self, start_pos, board, ignore_pos=-1):
         color = board[start_pos]
         group = [start_pos]
-        visited = {start_pos}
+        # Use a simple list as a stack and a fixed-size array as visited for speed
+        visited = [False] * self.total_points
+        visited[start_pos] = True
         stack = [start_pos]
-        liberties = set()
+        liberties = 0
+        unique_liberties = set() # Still need set for unique liberties unfortunately
         
         while stack:
             curr = stack.pop()
@@ -89,25 +86,24 @@ class TorusGo:
                 if neighbor == ignore_pos: continue
                 val = board[neighbor]
                 if val == 0:
-                    liberties.add(neighbor)
-                elif val == color and neighbor not in visited:
-                    visited.add(neighbor)
+                    unique_liberties.add(neighbor)
+                elif val == color and not visited[neighbor]:
+                    visited[neighbor] = True
                     group.append(neighbor)
                     stack.append(neighbor)
-        return group, len(liberties)
+        return group, len(unique_liberties)
 
     def step(self, action):
         if self.game_over: return 0.0, True
         self.moves_made += 1
         
         if action == self.total_points or self.moves_made >= self.max_moves:
-            # Pass or Max Moves
             self.passes_in_row += 1
             if self.passes_in_row >= 2 or self.moves_made >= self.max_moves:
                 self.game_over = True
             self.current_player = -self.current_player
-            self.board_hash = self.board.tobytes()
-            self.history.add(self.board_hash + bytes([self.current_player + 1]))
+            if self.history is not None:
+                self.history.add(self.board.tobytes() + bytes([self.current_player + 1]))
             return 0.0, self.game_over
             
         self.passes_in_row = 0
@@ -118,13 +114,13 @@ class TorusGo:
         # Resolve captures
         for neighbor in self.neighbor_indices[action]:
             if self.board[neighbor] == opponent:
-                group, libs = self._find_group_info_fast(neighbor, self.board)
+                group, libs = self._find_group_info(neighbor, self.board)
                 if libs == 0:
                     for p in group: self.board[p] = 0
                         
-        self.current_player = opponent
-        self.board_hash = self.board.tobytes()
-        self.history.add(self.board_hash + bytes([self.current_player + 1]))
+        self.current_player = -self.current_player
+        if self.history is not None:
+            self.history.add(self.board.tobytes() + bytes([self.current_player + 1]))
         return 0.0, False
 
     def get_reward(self):
@@ -160,13 +156,14 @@ class TorusGo:
         return group, reached_black, reached_white
 
     def clone(self):
+        """FASTER CLONE: Skip history copy."""
         new_game = TorusGo(self.size, self.max_moves)
         new_game.board = self.board.copy()
         new_game.current_player = self.current_player
-        new_game.history = self.history.copy()
         new_game.passes_in_row = self.passes_in_row
         new_game.game_over = self.game_over
         new_game.moves_made = self.moves_made
+        # history stays None for MCTS clones
         return new_game
 
     def get_state_input(self, in_channels=2, move_number=0):

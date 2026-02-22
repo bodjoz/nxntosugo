@@ -20,13 +20,14 @@ class ResBlock(nn.Module):
         return out
 
 class TorusGoNet(nn.Module):
-    def __init__(self, size=4, channels=64, num_res_blocks=3):
+    def __init__(self, size=4, channels=64, num_res_blocks=3, in_channels=2):
         super(TorusGoNet, self).__init__()
         self.size = size
+        self.in_channels = in_channels
         self.action_size = size * size + 1
         
         # Initial convolutional block
-        self.conv = nn.Conv2d(2, channels, kernel_size=3, padding=1, padding_mode='circular')
+        self.conv = nn.Conv2d(in_channels, channels, kernel_size=3, padding=1, padding_mode='circular')
         self.bn = nn.BatchNorm2d(channels)
         
         # Residual blocks
@@ -37,14 +38,14 @@ class TorusGoNet(nn.Module):
         self.pi_bn = nn.BatchNorm2d(2)
         self.pi_fc = nn.Linear(2 * size * size, self.action_size)
         
-        # Value Head
+        # Value Head (wider for better position evaluation)
         self.v_conv = nn.Conv2d(channels, 1, kernel_size=1)
         self.v_bn = nn.BatchNorm2d(1)
-        self.v_fc1 = nn.Linear(1 * size * size, 64)
-        self.v_fc2 = nn.Linear(64, 1)
+        self.v_fc1 = nn.Linear(1 * size * size, 128)
+        self.v_fc2 = nn.Linear(128, 1)
 
     def forward(self, x):
-        """x input tensor shape: [Batch, 2, size, size]"""
+        """x input tensor shape: [Batch, in_channels, size, size]"""
         # Common layers
         out = F.relu(self.bn(self.conv(x)))
         for block in self.res_blocks:

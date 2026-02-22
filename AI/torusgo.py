@@ -194,13 +194,21 @@ class TorusGo:
         new_game.game_over = self.game_over
         return new_game
         
-    def get_state_input(self):
+    def get_state_input(self, in_channels=2, move_number=0):
         """Returns state tensor representation for Neural Network. 
-        Shape: [2, size, size]
-        Channel 0: Current player stones
-        Channel 1: Opponent stones
+        in_channels=2: Shape [2, size, size] — current player stones, opponent stones
+        in_channels=4: Shape [4, size, size] — adds color indicator plane and move number plane
         """
-        state = np.zeros((2, self.size, self.size), dtype=np.float32)
-        state[0] = (self.board == self.current_player).astype(np.float32)
-        state[1] = (self.board == -self.current_player).astype(np.float32)
+        if in_channels == 4:
+            state = np.zeros((4, self.size, self.size), dtype=np.float32)
+            state[0] = (self.board == self.current_player).astype(np.float32)
+            state[1] = (self.board == -self.current_player).astype(np.float32)
+            # Channel 2: color indicator (1.0 if current player is Black, 0.0 if White)
+            state[2] = np.ones((self.size, self.size), dtype=np.float32) if self.current_player == 1 else np.zeros((self.size, self.size), dtype=np.float32)
+            # Channel 3: normalized move number (0.0 to 1.0, capped at 1.0 after ~160 moves)
+            state[3] = np.full((self.size, self.size), min(1.0, move_number / (2 * self.size * self.size)), dtype=np.float32)
+        else:
+            state = np.zeros((2, self.size, self.size), dtype=np.float32)
+            state[0] = (self.board == self.current_player).astype(np.float32)
+            state[1] = (self.board == -self.current_player).astype(np.float32)
         return state

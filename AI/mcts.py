@@ -30,7 +30,6 @@ class Node:
         if sum_policy > 0:
             legal_policy /= sum_policy
         else:
-            # If all valid moves have 0 probability (shouldn't happen with softmax, but safety fallback)
             legal_policy = legal_actions / np.sum(legal_actions)
             
         for action, prob in enumerate(legal_policy):
@@ -43,44 +42,65 @@ class Node:
                 )
 
 class MCTS:
-    def __init__(self, model, num_simulations=40, c_puct=1.5, device='cpu'):
+    def __init__(self, model, num_simulations=40, c_puct=1.5, device='cpu',
+                 add_dirichlet_noise=False, dirichlet_alpha=0.03, dirichlet_epsilon=0.25):
         self.model = model
         self.num_simulations = num_simulations
         self.c_puct = c_puct
         self.device = device
+        self.add_dirichlet_noise = add_dirichlet_noise
+        self.dirichlet_alpha = dirichlet_alpha
+        self.dirichlet_epsilon = dirichlet_epsilon
+        # Detect model input channels
+        self.in_channels = getattr(model, 'in_channels', 2)
         
     def _ucb_score(self, parent, child):
         prior_score = self.c_puct * child.prior * math.sqrt(parent.visit_count) / (child.visit_count + 1)
-        expected_value = -child.value # Child value is from opponent's perspective, negate it.
+        expected_value = -child.value
         return expected_value + prior_score
+
+    def _get_state_tensor(self, game, move_number=0):
+        """Create state tensor with correct number of input channels."""
+        state = game.get_state_input(in_channels=self.in_channels, move_number=move_number)
+        return torch.tensor(state, dtype=torch.float32).unsqueeze(0).to(self.device)
         
-    def get_action_prob(self, game, temperature=1.0):
+    def get_action_prob(self, game, temperature=1.0, move_number=0):
         """Runs MCTS and returns visitation probabilities for the root state."""
         root = Node(0, current_player=game.current_player)
         
         # Initial expansion
-        state_tensor = torch.tensor(game.get_state_input(), dtype=torch.float32).unsqueeze(0).to(self.device)
+        state_tensor = self._get_state_tensor(game, move_number)
         self.model.eval()
         with torch.no_grad():
             policy, value = self.model(state_tensor)
             policy = torch.softmax(policy, dim=1).cpu().numpy()[0]
         root.expand(game, policy)
         
+        # Add Dirichlet noise at root for exploration during training
+        if self.add_dirichlet_noise and root.children:
+            actions = list(root.children.keys())
+            noise = np.random.dirichlet([self.dirichlet_alpha] * len(actions))
+            for i, action in enumerate(actions):
+                child = root.children[action]
+                child.prior = (1 - self.dirichlet_epsilon) * child.prior + self.dirichlet_epsilon * noise[i]
+        
         # Simulations
+        sim_move_offset = 0
         for _ in range(self.num_simulations):
             node = root
             scratch_game = game.clone()
+            sim_move_offset = 0
             
             # 1. Select
             while node.children:
-                # Select child with highest UCB score
                 action, next_node = max(node.children.items(), key=lambda item: self._ucb_score(node, item[1]))
                 scratch_game.step(action)
                 node = next_node
+                sim_move_offset += 1
                 
             # 2. Evaluate & Expand
             if not scratch_game.game_over:
-                state_tensor = torch.tensor(scratch_game.get_state_input(), dtype=torch.float32).unsqueeze(0).to(self.device)
+                state_tensor = self._get_state_tensor(scratch_game, move_number + sim_move_offset)
                 with torch.no_grad():
                     policy, value_tensor = self.model(state_tensor)
                     policy = torch.softmax(policy, dim=1).cpu().numpy()[0]
@@ -88,9 +108,7 @@ class MCTS:
                     
                 node.expand(scratch_game, policy)
             else:
-                # Terminal state
                 reward = scratch_game.get_reward()
-                # Determine value from perspective of 'node'
                 if scratch_game.current_player == 1:
                     value = reward
                 else:

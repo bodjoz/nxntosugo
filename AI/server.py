@@ -18,11 +18,22 @@ def get_model(size):
         return models[size]
         
     print(f"Loading {size}x{size} trained model on {device}...")
+
     if size == 9:
-        model = TorusGoNet(size=size, channels=128, num_res_blocks=5).to(device)
-        model_path = "model_9x9_final.pt"
+        # Try 4-channel RunPod-trained model first, fall back to 2-channel
+        trained_path = "model_9x9_trained.pt"
+        legacy_path = "model_9x9_final.pt"
+
+        if __import__('os').path.exists(trained_path):
+            model = TorusGoNet(size=size, channels=128, num_res_blocks=5, in_channels=4).to(device)
+            model_path = trained_path
+            print(f"  Using 4-channel RunPod-trained model")
+        else:
+            model = TorusGoNet(size=size, channels=128, num_res_blocks=5, in_channels=2).to(device)
+            model_path = legacy_path
+            print(f"  Using 2-channel legacy model")
     else:
-        model = TorusGoNet(size=size, channels=64, num_res_blocks=2).to(device)
+        model = TorusGoNet(size=size, channels=64, num_res_blocks=2, in_channels=2).to(device)
         model_path = "model_final.pt"
         
     try:
@@ -47,6 +58,13 @@ def parse_board(state_data):
     game.current_player = int(state_data['currentPlayer'])
     return game
 
+def get_state_tensor(game, model):
+    """Create the right input tensor based on the model's in_channels."""
+    in_ch = model.in_channels
+    move_number = int(np.count_nonzero(game.board))  # approximate move number
+    state = game.get_state_input(in_channels=in_ch, move_number=move_number)
+    return torch.tensor(state, dtype=torch.float32).unsqueeze(0).to(device)
+
 @app.route('/evaluate', methods=['POST'])
 def evaluate():
     try:
@@ -54,7 +72,7 @@ def evaluate():
         game = parse_board(data)
         model = get_model(game.size)
         
-        state_tensor = torch.tensor(game.get_state_input(), dtype=torch.float32).unsqueeze(0).to(device)
+        state_tensor = get_state_tensor(game, model)
         
         with torch.no_grad():
             policy, value = model(state_tensor)

@@ -52,7 +52,10 @@ def play_game(model, mcts_simulations=40, temperature=1.0, device='cpu', size=4,
 
 
 def play_game_for_worker(args):
-    """Wrapper for multiprocessing Pool — loads model weights on CPU and plays one game."""
+    """Wrapper for multiprocessing Pool — loads model weights on CPU and plays one game.
+    Returns (states, policies, values, game_result) where game_result is:
+      +1.0 = Black wins, -1.0 = White wins, 0.0 = draw
+    """
     model_state_dict, mcts_simulations, size, in_channels = args
     
     device = torch.device('cpu')
@@ -65,7 +68,11 @@ def play_game_for_worker(args):
         device=device, size=size, add_noise=True, in_channels=in_channels
     )
     
-    return states, policies, values
+    # Determine game result from value targets:
+    # values[0] is from Black's perspective (Black always moves first)
+    game_result = values[0] if len(values) > 0 else 0.0
+    
+    return states, policies, values, game_result
 
 
 def augment_torus_data(states, policies, values, size=9, num_augments=4):

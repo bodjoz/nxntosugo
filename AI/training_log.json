@@ -1,13 +1,18 @@
 [
   {
     "cycle": 1,
-    "loss": 5.2901707490285235,
-    "pi_loss": 4.391160249710083,
-    "v_loss": 0.8990104893843333,
-    "buffer_size": 1345,
-    "games": 2,
-    "avg_game_len": 136.0,
-    "cycle_time_s": 14.143799781799316,
-    "lr": 0.002
+    "loss": 5.4391708970069885,
+    "pi_loss": 4.448807656764984,
+    "v_loss": 0.9903631582856178,
+    "buffer_size": 1856,
+    "games": 4,
+    "avg_game_len": 93.5,
+    "cycle_time_s": 13.767734050750732,
+    "lr": 0.002,
+    "black_wins": 2,
+    "white_wins": 2,
+    "draws": 0,
+    "black_win_pct": 50.0,
+    "white_win_pct": 50.0
   }
 ]

@@ -176,21 +176,34 @@ def train(args):
         ]
 
         cycle_states, cycle_policies, cycle_values = [], [], []
+        game_results = []  # +1=Black win, -1=White win, 0=draw
         completed = 0
 
         with mp.Pool(processes=args.workers) as pool:
             for result in pool.imap_unordered(play_game_for_worker, worker_args):
-                states, policies, values = result
+                states, policies, values, game_result = result
                 cycle_states.extend(states)
                 cycle_policies.extend(policies)
                 cycle_values.extend(values)
+                game_results.append(game_result)
                 completed += 1
                 if completed % max(1, args.games_per_cycle // 10) == 0:
                     print(f"  ... {completed}/{args.games_per_cycle} games done")
 
         sp_time = time.time() - sp_start
         avg_game_len = len(cycle_states) / max(1, args.games_per_cycle)
+
+        # Win rate stats
+        black_wins = sum(1 for r in game_results if r > 0)
+        white_wins = sum(1 for r in game_results if r < 0)
+        draws = sum(1 for r in game_results if r == 0)
+        total_games = len(game_results)
+        black_pct = black_wins / total_games * 100 if total_games > 0 else 0
+        white_pct = white_wins / total_games * 100 if total_games > 0 else 0
+        draw_pct = draws / total_games * 100 if total_games > 0 else 0
+
         print(f"[selfplay] {args.games_per_cycle} games in {sp_time:.1f}s ({sp_time/args.games_per_cycle:.2f}s/game, avg {avg_game_len:.0f} moves)")
+        print(f"[selfplay] Results: Black {black_wins}/{total_games} ({black_pct:.1f}%) | White {white_wins}/{total_games} ({white_pct:.1f}%) | Draw {draws}/{total_games} ({draw_pct:.1f}%)")
 
         # -------------------------------------------------------------------
         # 2. Torus data augmentation
@@ -285,6 +298,11 @@ def train(args):
             "avg_game_len": avg_game_len,
             "cycle_time_s": cycle_time,
             "lr": lr,
+            "black_wins": black_wins,
+            "white_wins": white_wins,
+            "draws": draws,
+            "black_win_pct": round(black_pct, 1),
+            "white_win_pct": round(white_pct, 1),
         }
         log_entries.append(entry)
 

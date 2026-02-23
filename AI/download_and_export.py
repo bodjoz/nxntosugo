@@ -29,7 +29,26 @@ def main():
 
     # Load the 4-channel model
     model = TorusGoNet(size=9, channels=128, num_res_blocks=5, in_channels=4).to(device)
-    state_dict = torch.load(checkpoint_path, map_location=device, weights_only=True)
+    
+    # PyTorch 2.6+ defaults to weights_only=True, which can fail if the checkpoint 
+    # contains certain types (like numpy scalars). We'll allow the necessary global.
+    # Note: Using np._core to avoid DeprecationWarning in newer NumPy versions.
+    if hasattr(torch.serialization, 'add_safe_globals'):
+        try:
+            torch.serialization.add_safe_globals([np._core.multiarray._reconstruct])
+        except AttributeError:
+            # Fallback for older NumPy versions
+            torch.serialization.add_safe_globals([np.core.multiarray._reconstruct])
+    
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    
+    # Handle full training checkpoints which wrap the model in a 'model' key
+    if isinstance(checkpoint, dict) and 'model' in checkpoint:
+        print("📦 Detected full training checkpoint, extracting model state...")
+        state_dict = checkpoint['model']
+    else:
+        state_dict = checkpoint
+
     model.load_state_dict(state_dict)
     model.eval()
     print(f"✅ Loaded 4-channel model from {checkpoint_path}")

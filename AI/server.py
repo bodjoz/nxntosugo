@@ -19,12 +19,15 @@ def get_model(size):
         
     print(f"Loading {size}x{size} trained model on {device}...")
 
+    import os
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+
     if size == 9:
         # Try 4-channel RunPod-trained model first, fall back to 2-channel
-        trained_path = "model_9x9_trained.pt"
-        legacy_path = "model_9x9_final.pt"
+        trained_path = os.path.join(base_dir, "model_9x9_trained.pt")
+        legacy_path = os.path.join(base_dir, "model_9x9_final.pt")
 
-        if __import__('os').path.exists(trained_path):
+        if os.path.exists(trained_path):
             model = TorusGoNet(size=size, channels=128, num_res_blocks=5, in_channels=4).to(device)
             model_path = trained_path
             print(f"  Using 4-channel RunPod-trained model")
@@ -34,14 +37,24 @@ def get_model(size):
             print(f"  Using 2-channel legacy model")
     else:
         model = TorusGoNet(size=size, channels=64, num_res_blocks=2, in_channels=2).to(device)
-        model_path = "model_final.pt"
+        model_path = os.path.join(base_dir, "model_final.pt")
         
+    # PyTorch 2.6+ compatibility
+    if hasattr(torch.serialization, 'add_safe_globals'):
+        try:
+            torch.serialization.add_safe_globals([np._core.multiarray._reconstruct])
+        except AttributeError:
+            torch.serialization.add_safe_globals([np.core.multiarray._reconstruct])
+
     try:
-        model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+        model.load_state_dict(torch.load(model_path, map_location=device, weights_only=False))
         model.eval()
-        print(f"Model {model_path} loaded successfully.")
+        print(f"✅ Model {model_path} loaded successfully.")
     except Exception as e:
-        print(f"Failed to load {model_path}: {e}")
+        print(f"❌ Failed to load {model_path}: {e}")
+        # If it's a size 9 board and we failed to load weights, we should probably not proceed
+        if size == 9:
+            raise e
         
     models[size] = model
     return model

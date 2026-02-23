@@ -181,7 +181,7 @@ def train(args):
         checkpoint = {
             'cycle': cycle, 'model': model.state_dict(), 'best_model': best_model.state_dict(),
             'optimizer': optimizer.state_dict(), 'scheduler': scheduler.state_dict(),
-            'buffer_states': all_states[-50000:], 'buffer_policies': all_policies[-50000:], 'buffer_values': all_values[-50000:]
+            'buffer_states': all_states[-20000:], 'buffer_policies': all_policies[-20000:], 'buffer_values': all_values[-20000:]
         }
         torch.save(checkpoint, os.path.join(CHECKPOINT_DIR, "latest.pt"))
         print(f"[cycle] Cycle finished in {(time.time()-cycle_start)/60:.1f}m. Total: {(time.time()-total_start)/3600:.1f}h")
